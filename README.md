@@ -12,11 +12,24 @@ Works:
 Works in progress:
 - meaningful statistics
 - ability to compile torspray to a standalone executable
+- password login support
 
 
 ### Why?
 This tool is meant to empower less tech-savvy users to be able to quickly and effortlessly
 bring up tor nodes to help out the network in times of crisis.
+
+
+### What do I need?
+- You will need a virtual machine (VM) with Debian 11 at a hosting provider. I use Hetzner.
+- On installation, specify the ssh key that torspray generates. Passwords support doesn't yet work unfortunately.
+  - if you don't remember, run `python torspray.py showpubkey`
+- Once the server is provisioned you can add it to torspray to manage
+
+
+### Bugs
+The software is in very early stages if you encounter problems, open a github issue
+or DM me on twitter @gergely_kalman
 
 
 ### Installation
