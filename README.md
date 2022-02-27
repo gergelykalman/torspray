@@ -23,7 +23,7 @@ bring up tor nodes to help out the network in times of crisis.
 ### What do I need?
 - You will need a virtual machine (VM) with Debian 11 at a hosting provider. I use Hetzner.
 - On installation, specify the ssh key that torspray generates. Passwords support doesn't yet work unfortunately.
-  - if you don't remember, run `python torspray.py showpubkey`
+  - if you don't remember, run `torspray showpubkey`
 - Once the server is provisioned you can add it to torspray to manage
 
 
@@ -35,21 +35,14 @@ or DM me on twitter @gergely_kalman
 ### Installation
 
 ```bash
-$ mkdir torspray
-$ cd torspray
-$ python3 -m venv venv
-$ . ./venv/bin/activate
-$ pip install paramiko
-$ git clone https://github.com/gergelykalman/torspray.git
-$ cd torspray
-$ python torspray.py
+$ pip install torspray
 ```
 
 ### Usage example
 
 initialization:
 ```bash
-$ python torspray.py init pleaseuseaproperemailhere@example.com
+$ torspray init pleaseuseaproperemailhere@example.com
 [+] Initializing torspray directory: /home/synapse/projects/development/torspray/code/.torspray
 [+] Generating SSH keys
 Basic configuration written, SSH key generated:
@@ -61,11 +54,11 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDrMjEtbW/rkbf50kkpejiftyc5SLARU/GFaYusWGBq
 
 Adding nodes, VMs might take time to come up, so have to retry:
 ```
-$ python torspray.py add testnode 65.108.217.166
+$ torspray add testnode 65.108.217.166
 [+] Adding server 65.108.217.166, password: None
 [-] Failed to reach server, try again later
 
-$ python torspray.py add testnode 65.108.217.166
+$ torspray add testnode 65.108.217.166
 [+] Adding server 65.108.217.166, password: None
 We have:
 	username root
@@ -74,14 +67,14 @@ We have:
 
 Listing nodes:
 ```
-$ python torspray.py list
+$ torspray list
 [+] Servers in the DB:
 	testnode: {'address': '65.108.217.166', 'hostname': 'testnode'}
 ```
 
 Installing tor bridge on node (log was cut short):
 ```
-$ python torspray.py spray testnode
+$ torspray spray testnode
 [+] Spray verifying versions
 $ dpkg --print-architecture
 amd64
@@ -95,7 +88,7 @@ $ systemctl restart tor.service
 
 Testing execute on node 'testnode'
 ```
-$ python torspray.py node-exec testnode 'hostname'
+$ torspray node-exec testnode 'hostname'
 [+] Execing: hostname
 testnode:
 debian-2gb-hel1-1
@@ -103,7 +96,7 @@ debian-2gb-hel1-1
 
 Showing pubkey because I forgot:
 ```
-$ python torspray.py showpubkey
+$ torspray showpubkey
 ##################################################
 #        Use this key when creating the VM:      #
 ##################################################
@@ -112,13 +105,13 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDrMjEtbW/rkbf50kkpejiftyc5SLARU/GFaYusWGBq
 
 Adding and spraying 2nd node:
 ```
-$ python torspray.py add testnode2 65.108.150.86
+$ torspray add testnode2 65.108.150.86
 [+] Adding server 65.108.150.86, password: None
 We have:
 	username root
 	hostname debian-2gb-hel1-2
 
-$ python torspray.py spray testnode2
+$ torspray spray testnode2
 [+] Spray verifying versions
 ...
 
@@ -126,7 +119,7 @@ $ python torspray.py spray testnode2
 
 Executing 'hostname' on all nodes we know about:
 ```
-$ python torspray.py cluster-exec 'hostname'
+$ torspray cluster-exec 'hostname'
 [+] Execing: hostname
 testnode:
 debian-2gb-hel1-1
