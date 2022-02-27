@@ -15,7 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 import paramiko
 import argparse
 
-BASE_DIR = os.path.join(os.path.dirname(__file__), ".torspray")
+#BASE_DIR = os.path.join(os.path.dirname(__file__), ".torspray")
+# TODO: do this more properly
+BASE_DIR = os.path.join(os.getcwd(), ".torspray")
 VERSION = 0.1
 CONFIGNAME = os.path.join(BASE_DIR, "torspray.json")
 HOSTKEYS = os.path.join(BASE_DIR, "hostkeys")
@@ -634,6 +636,10 @@ class TorSpray:
         self.parse_args()
 
 
-if __name__ == "__main__":
+def main():
     ts = TorSpray()
     ts.main()
+
+
+if __name__ == "__main__":
+    main()
