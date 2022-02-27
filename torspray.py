@@ -1,7 +1,12 @@
+import random
 import os
 import io
 import shutil
 import json
+import re
+import pprint
+import time
+from datetime import datetime as dt, timedelta as td
 
 import concurrent.futures
 
@@ -13,6 +18,8 @@ import argparse
 BASE_DIR = os.path.join(os.path.dirname(__file__), ".torspray")
 CONFIGNAME = os.path.join(BASE_DIR, "torspray.json")
 HOSTKEYS = os.path.join(BASE_DIR, "hostkeys")
+PRIVKEY = os.path.join(BASE_DIR, "torspray_key")
+PUBKEY = os.path.join(BASE_DIR, "torspray_key.pub")
 USER = "root"
 TIMEOUT = 30
 MAX_WORKERS = 10
@@ -24,16 +31,21 @@ class TorSpray:
         self.__pkey = self.__load_private_key()
 
     def __load_private_key(self):
-        keyname = os.path.join(BASE_DIR, "torspray_key")
         pkey = None
-        try:
-            pkey = paramiko.RSAKey.from_private_key_file(keyname)
-        except FileNotFoundError:
-            # TODO: fix this
-            print("ERROR: SSH key files not found in {}".format(keyname))
-            print("Look in the help for more info")
-            print("ssh-keygen -f ./.torspray/torspray_key -t rsa -b 4096 -N \"\"")
-            exit(1)
+        while True:
+            try:
+                pkey = paramiko.RSAKey.from_private_key_file(PRIVKEY)
+            except FileNotFoundError:
+                print("ERROR: SSH key files not found in {}".format(PRIVKEY))
+                resp = input("Would you like me to genreate a new keypair? (y/N): ")
+                if resp in ("y", "Y"):
+                    self.__genkey()
+                    print("Done")
+                else:
+                    print("Aborted")
+                    exit(1)
+            else:
+                break
         return pkey
 
     def __connect_ssh(self, server, username, ignore_missing=False):
@@ -55,10 +67,9 @@ class TorSpray:
             except FileNotFoundError:
                 print("[+] Torspray is not yet configured...")
                 self.__init_config()
-                print("Basic configuration written")
-                print("This version doesn't yet support key generation, so please place your keys to:\n"
-                      ".torspray/torspray_key\n"
-                      ".torspray/torspray_key.pub\n")
+                self.__genkey()
+                print("Basic configuration written, SSH key generated:")
+                self.__showpubkey()
                 exit(1)
             else:
                 break
@@ -92,9 +103,6 @@ class TorSpray:
             json.dump(config, f, sort_keys=True, indent=4)
 
     def __get_connection(self, server, user, ignore_missing=False):
-        # print("[+] Opening connection to: {}@{}, ignore missing: {}".format(
-        #     user, server, ignore_missing
-        # ))
         client = self.__connect_ssh(server, user, ignore_missing)
         return client
 
@@ -102,8 +110,6 @@ class TorSpray:
         connection.close()
 
     def __run_command(self, client, command):
-        # print("[+] Running command: {}".format(command))
-
         _stdin, stdout, stderr = client.exec_command(command)
 
         # TODO: merge stdout and stderr!
@@ -113,13 +119,13 @@ class TorSpray:
         # WARNING: anything that comes out here can be MALICIOUS!
         return out, err
 
-    def __get_server_addr(self, target):
+    def __get_server_data(self, target):
         found = None
         servers = self.__list_servers()
         for nodename, data in servers.items():
             if nodename != target:
                 pass
-            found = data["address"]
+            found = data
 
         if found is None:
             print("ERROR: node {} was not found in db!".format(target))
@@ -128,7 +134,7 @@ class TorSpray:
         return found
 
     def copyfile(self, nodename, direction, src, dst):
-        addr = self.__get_server_addr(nodename)
+        addr = self.__get_server_data(nodename)["address"]
 
         client = self.__connect_ssh(addr, "root")
 
@@ -141,14 +147,6 @@ class TorSpray:
         else:
             sftp.put(src, dst)
         sftp.close()
-
-    def get_file(self, server, src, dst):
-        print("[+] Get file from {}: {} -> {}".format(server, src, dst))
-        self.__transfer_file(server, "get", src, dst)
-
-    def put_file(self, server, src, dst):
-        print("[+] Put file to {}: {} -> {}".format(server, src, dst))
-        self.__transfer_file(server, "put", src, dst)
 
     def __add_server(self, hostname, address, overwrite):
         db = self.__db_read()
@@ -181,18 +179,22 @@ class TorSpray:
 
         self.__close_connection(client)
 
-    def __list_servers(self):
+    def __list_servers(self, filter=None):
         servers = {}
         config = self.__db_read()
         for name, data in config["servers"].items():
-            servers[name] = data
+            if filter is None or name == filter:
+                servers[name] = data
         return servers
 
     def list_servers(self):
-        print("[+] Servers in the DB:")
         servers = self.__list_servers()
-        for name, data in servers.items():
-            print("\t{}: {}".format(name, data))
+        if len(servers) == 0:
+            print("No servers in DB")
+        else:
+            print("[+] Servers in the DB:")
+            for name, data in servers.items():
+                print("\t{}: {}".format(name, data))
 
     def remove_server(self, nodename):
         print("[+] Removing {}".format(nodename))
@@ -202,13 +204,11 @@ class TorSpray:
             self.__db_write(config)
             print("Server removed")
 
-    def node_exec(self, cmd):
+    def __node_exec(self, cmd, servers):
         def run(server, cmd):
             conn = self.__get_connection(server, USER)
             out, err = self.__run_command(conn, cmd)
             return out, err
-
-        servers = self.__list_servers()
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {}
@@ -224,11 +224,93 @@ class TorSpray:
                     print("EXCEPTION on {}: {}".format(server, exc))
                 else:
                     out, err = data
-                    print("{}:\n{} {}".format(server, out, err))
+                    yield server, out, err
+
+    def node_exec(self, node, cmd):
+        print("[+] Execing: {}".format(cmd))
+        servers = self.__list_servers(filter=node)
+        for result in self.__node_exec(cmd, servers):
+            server, out, err = result
+            print("{}:".format(server))
+            print(out)
+
+    def cluster_exec(self, cmd):
+        print("[+] Execing: {}".format(cmd))
+        servers = self.__list_servers()
+        for result in self.__node_exec(cmd, servers):
+            server, out, err = result
+            print("{}:".format(server))
+            print(out)
 
     def status(self):
         print("[+] Status:")
-        self.node_exec("whoami")
+        servers = self.__list_servers()
+        for result in self.__node_exec("whoami", servers):
+            print(result)
+
+    def netstatus(self):
+        print("[+] Status:")
+        previous = dt.now()
+        bw = {}
+        servers = self.__list_servers()
+        while True:
+            for result in self.__node_exec("ifconfig eth0", servers):
+                server, out, err = result
+                for line in out.split("\n"):
+                    # TODO: this is very brittle
+                    match = re.search(" +(?P<direction>[RT]X) packets (?P<packets>\d+) *bytes (?P<bytes>\d+)", line)
+                    if match is not None:
+                        matchdict = match.groupdict()
+                        if bw.get(server) is None:
+                            bw[server] = {}
+                        bw[server][match["direction"]] = {
+                                "packets": matchdict["packets"],
+                                "bytes": matchdict["bytes"],
+                            }
+            pprint.pprint(bw)
+            now = dt.now()
+            delta = (now-previous).total_seconds()
+            time.sleep(max(0, 1-delta))
+            previous = now
+
+    def __genkey(self, overwrite=False):
+        print("[+] Generating SSH keys")
+        if not overwrite:
+            for name, filename in (
+                            ("private", PRIVKEY),
+                            ("public", PUBKEY)):
+                if os.path.exists(filename):
+                    print("ERROR: {} key {} exists, aborting!".format(name, filename))
+                    exit(1)
+
+        # private part
+        privkey = paramiko.RSAKey.generate(4096)
+        privkey.write_private_key_file(PRIVKEY)
+
+        # public part
+        with open(os.path.expanduser(PUBKEY), "w") as f:
+            f.write("{} {} {}".format(
+                privkey.get_name(),
+                privkey.get_base64(),
+                "torspray-{:x}@home".format(random.randint(2**31, 2**32)),
+            ))
+
+    def internal_genkey(self):
+        self.__genkey(overwrite=True)
+
+    def __showpubkey(self):
+        print("##################################################")
+        print("#        Use this key when creating the VM:      #")
+        print("##################################################")
+        with open(PUBKEY) as f:
+            print(f.read())
+
+    def showpubkey(self):
+        self.__showpubkey()
+
+    def spray(self):
+        # TODO
+        pass
 
     def parse_args(self):
         parser = argparse.ArgumentParser()
@@ -252,6 +334,15 @@ class TorSpray:
         parser_status = subparsers.add_parser('status', help='list node status')
         parser_status.set_defaults(func='status')
 
+        parser_netstatus = subparsers.add_parser('netstatus', help='list node network status')
+        parser_netstatus.set_defaults(func='netstatus')
+
+        parser_showpubkey = subparsers.add_parser('showpubkey', help='show public key signature for VM creation')
+        parser_showpubkey.set_defaults(func='showpubkey')
+
+        parser_genkey = subparsers.add_parser('internal-genkey', help='regenerate and OVERWRITE ssh keys')
+        parser_genkey.set_defaults(func='internal-genkey')
+
         parser_copyfile = subparsers.add_parser('copyfile', help='copy file to/from node')
         parser_copyfile.add_argument('server', type=str)
         parser_copyfile.add_argument('direction', choices=["put", "get"], type=str)
@@ -259,9 +350,13 @@ class TorSpray:
         parser_copyfile.add_argument('dst', type=str)
         parser_copyfile.set_defaults(func='copyfile')
 
-        parser_node_exec = subparsers.add_parser('node-exec', help='execute commands on nodes')
-        parser_node_exec.add_argument('cmd', type=str)
+        parser_cluster_exec = subparsers.add_parser('cluster-exec', help='execute commands on one node')
+        parser_cluster_exec.add_argument('cmd', type=str)
+        parser_cluster_exec.set_defaults(func='cluster-exec')
 
+        parser_node_exec = subparsers.add_parser('node-exec', help='execute commands on all nodes')
+        parser_node_exec.add_argument('hostname', type=str)
+        parser_node_exec.add_argument('cmd', type=str)
         parser_node_exec.set_defaults(func='node-exec')
 
         # do parse
@@ -276,13 +371,21 @@ class TorSpray:
             self.remove_server(args.hostname)
         elif args.func == "status":
             self.status()
+        elif args.func == "netstatus":
+            self.netstatus()
+        elif args.func == "internal-genkey":
+            # internal function
+            self.internal_genkey()
+        elif args.func == "showpubkey":
+            self.showpubkey()
         elif args.func == "copyfile":
             self.copyfile(args.server, args.direction, args.src, args.dst)
         elif args.func == "node-exec":
-            self.node_exec(args.cmd)
+            self.node_exec(args.hostname, args.cmd)
+        elif args.func == "cluster-exec":
+            self.cluster_exec(args.cmd)
         elif args.func == "spray":
-            # TODO
-            raise NotImplemented()
+            self.spray()
         else:
             parser.print_help()
 
