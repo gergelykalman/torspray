@@ -7,9 +7,9 @@ Works:
 - node management commands
 - file copy
 - command execution on one or all nodes
+- automatic configuration of tor on the node
 
 Works in progress:
-- automatic configuration of tor on the node
 - meaningful statistics
 - ability to compile torspray to a standalone executable
 
