@@ -1,6 +1,23 @@
 # torspray
 A console utility to bring up new Tor nodes easily
 
+### Current progress
+Works:
+- key generation
+- node management commands
+- file copy
+- command execution on one or all nodes
+
+Works in progress:
+- automatic configuration of tor on the node
+- meaningful statistics
+- ability to compile torspray to a standalone executable
+
+
+### Why?
+This tool is meant to empower less tech-savvy users to be able to quickly and effortlessly
+bring up tor nodes to help out the network in times of crisis.
+
 
 ### Installation
 
