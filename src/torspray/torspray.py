@@ -1,8 +1,4 @@
-import random
 import os
-import io
-import shutil
-import json
 import re
 import pprint
 import time
@@ -12,59 +8,13 @@ import concurrent.futures
 
 from concurrent.futures import ThreadPoolExecutor
 
-import paramiko
 import argparse
 
-VERSION = 0.1
-PORTRANGE = (1025, 65534)
-USER = "root"
-TIMEOUT = 30
-MAX_WORKERS = 10
-
-UNATTENDED_UPGRADES_CFG = """
-
-    "origin=Debian,codename=${distro_codename},label=Debian-Security";
-    "origin=TorProject";
-};
-Unattended-Upgrade::Package-Blacklist {
-};
-"""
-UNATTENDED_AUTO_CFG = """
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::AutocleanInterval "5";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::Verbose "1";
-"""
-TOR_SOURCES_LIST = """
-deb     [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] https://deb.torproject.org/torproject.org ###DISTRIBUTION### main
-deb-src [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] https://deb.torproject.org/torproject.org ###DISTRIBUTION### main
-"""
-CONFIG_TORRC = """
-BridgeRelay 1
-
-# Replace "TODO1" with a Tor port of your choice.
-# This port must be externally reachable.
-# Avoid port 9001 because it's commonly associated with Tor and censors may be scanning the Internet for this port.
-ORPort ###TODO1###
-
-ServerTransportPlugin obfs4 exec /usr/bin/obfs4proxy
-
-# Replace "TODO2" with an obfs4 port of your choice.
-# This port must be externally reachable and must be different from the one specified for ORPort.
-# Avoid port 9001 because it's commonly associated with Tor and censors may be scanning the Internet for this port.
-ServerTransportListenAddr obfs4 0.0.0.0:###TODO2###
-
-# Local communication port between Tor and obfs4.  Always set this to "auto".
-# "Ext" means "extended", not "external".  Don't try to set a specific port number, nor listen on 0.0.0.0.
-ExtORPort auto
-
-# Replace "<address@email.com>" with your email address so we can contact you if there are problems with your bridge.
-# This is optional but encouraged.
-ContactInfo <###CONTACTINFO###>
-
-# Pick a nickname that you like for your bridge.  This is optional.
-#Nickname ###NICKNAME###
-"""
+from modules.config import CONFIG
+from modules.db import DB
+from modules.ssh_keys import generate_key, remove_hostkeys
+from modules.node import Node, NodeAuthException, NodeTimeoutException
+from sprays.debian_11_torbridge.spray import Debian11Bridge
 
 
 class TorSpray:
@@ -80,233 +30,22 @@ class TorSpray:
         self.__CONF_DIR = self.__args.confdir
         self.__CONFIGNAME = os.path.join(self.__CONF_DIR, "torspray.json")
         self.__HOSTKEYS = os.path.join(self.__CONF_DIR, "hostkeys")
-        self.__PRIVKEY = os.path.join(self.__CONF_DIR, "torspray_key")
-        self.__PUBKEY = os.path.join(self.__CONF_DIR, "torspray_key.pub")
+        self.__PRIVPATH = os.path.join(self.__CONF_DIR, "torspray_key")
+        self.__PUBPATH = os.path.join(self.__CONF_DIR, "torspray_key.pub")
 
         # vars
-        self.__first_run = self.__is_first_run()
-        self.__pkey = None
+        self.__db = DB(self.__CONFIGNAME, self.__HOSTKEYS)
+        self.__first_run = self.__db.is_first_run()
 
-    def __load_private_key(self):
-        pkey = None
-        while True:
-            try:
-                pkey = paramiko.RSAKey.from_private_key_file(self.__PRIVKEY)
-            except FileNotFoundError:
-                print("ERROR: SSH key files not found in {}".format(self.__PRIVKEY))
-                resp = input("Would you like me to genreate a new keypair? (y/N): ")
-                if resp in ("y", "Y"):
-                    self.__genkey()
-                    print("Done")
-                else:
-                    print("Aborted")
-                    exit(1)
-            else:
-                break
-        return pkey
-
-    def __connect_ssh(self, server, username, ignore_missing=False):
-        client = paramiko.SSHClient()
-        client.load_host_keys(self.__HOSTKEYS)
-
-        # should we add missing keys?
-        if ignore_missing:
-            policy = paramiko.AutoAddPolicy()
-            client.set_missing_host_key_policy(policy)
-
-        if self.__pkey is None:
-            self.__pkey = self.__load_private_key()
-
-        client.connect(server, username=username, pkey=self.__pkey, timeout=TIMEOUT)
-        return client
-
-    def __is_first_run(self):
-        try:
-            self.__db_read()
-        except FileNotFoundError:
-            return True
-        else:
-            return False
-
-    def __init_config(self, contactinfo):
-        print("[+] Initializing torspray directory: {}".format(self.__CONF_DIR))
-
-        try:
-            os.makedirs(self.__CONF_DIR, 0o750)
-        except FileExistsError:
-            pass
-
-        with open(self.__CONFIGNAME, "w") as f:
-            config = {
-                "servers": {},
-                "torspray": {
-                    "contactinfo": contactinfo,
-                    "version": VERSION,
-                }
-            }
-            json.dump(config, f, sort_keys=True, indent=4)
-
-        with open(self.__HOSTKEYS, "w") as f:
-            pass
-
-    def __db_read(self):
-        with open(self.__CONFIGNAME, "r") as f:
-            config = json.load(f)
-        return config
-
-    def __db_write(self, config):
-        with open(self.__CONFIGNAME, "w") as f:
-            json.dump(config, f, sort_keys=True, indent=4)
-
-    def __get_connection(self, addr, user, ignore_missing=False):
-        client = self.__connect_ssh(addr, user, ignore_missing)
-        return client
-
-    def __close_connection(self, connection):
-        connection.close()
-
-    def __run_command(self, client, command):
-        _stdin, stdout, stderr = client.exec_command(command)
-
-        # TODO: merge stdout and stderr!
-        out = stdout.read().decode().strip()
-        err = stderr.read().decode().strip()
-
-        # WARNING: anything that comes out here can be MALICIOUS!
-        return out, err
-
-    def __get_server_data(self, target):
-        found = None
-        servers = self.__list_servers()
-        for nodename, data in servers.items():
-            if nodename != target:
-                pass
-            found = data
-
-        if found is None:
-            print("ERROR: node {} was not found in db!".format(target))
-            # exit(1)
-
-        return found
-
-    def need_init(func):
-        def magic(self, *args, **kwargs):
-            if self.__first_run:
-                print("Torspray has not been initialized, run torspray init YOUR_EMAIL_ADDR")
-                exit(1)
-            return func(self, *args, **kwargs)
-        return magic
-
-    @need_init
-    def copyfile(self, nodename, direction, src, dst):
-        addr = self.__get_server_data(nodename)["address"]
-
-        client = self.__connect_ssh(addr, "root")
-
-        if direction not in ("get", "put"):
-            raise ValueError("Invalid value for direction (not 'get' or 'put')")
-
-        sftp = client.open_sftp()
-        if direction == "get":
-            sftp.get(src, dst)
-        else:
-            sftp.put(src, dst)
-        sftp.close()
-
-    def __add_server(self, hostname, address, overwrite):
-        db = self.__db_read()
-        if not overwrite and hostname in db["servers"]:
-            print("{} is already in servers!".format(hostname))
-            return
-
-        db["servers"][hostname] = {
-            "hostname": hostname,
-            "address": address,
-        }
-
-        self.__db_write(db)
-
-    def __remove_hostkeys(self, address):
-        print("Clearing host from hostkeys")
-        hostkeys = paramiko.HostKeys(self.__HOSTKEYS)
-        if hostkeys.get(address) is not None:
-            del hostkeys[address]
-        hostkeys.save(self.__HOSTKEYS)
-
-    @need_init
-    def add_server(self, hostname, address, password=None, overwrite=False):
-        print("[+] Adding server {}, password: {}".format(address, password))
-
-        if overwrite:
-            self.__remove_hostkeys(address)
-
-        try:
-            client = self.__get_connection(address, USER, ignore_missing=True)
-        except paramiko.ssh_exception.PasswordRequiredException:
-            print("[-] Could not authenticate to the server, either the key is bad or the password")
-            exit(1)
-        except paramiko.ssh_exception.NoValidConnectionsError:
-            print("[-] Failed to reach server, try again later")
-            exit(1)
-
-        out, err = self.__run_command(client, "whoami")
-        ret_username = out.strip()
-
-        out, err = self.__run_command(client, "hostname")
-        ret_hostname = out.strip()
-        print("We have:")
-        print("\tusername", ret_username)
-        print("\thostname", ret_hostname)
-
-        self.__add_server(hostname, address, overwrite)
-
-        self.__close_connection(client)
-
-    def __list_servers(self, filter=None):
-        servers = {}
-        config = self.__db_read()
-        for name, data in config["servers"].items():
-            if filter is None or name == filter:
-                servers[name] = data
-        return servers
-
-    @need_init
-    def list_servers(self):
-        servers = self.__list_servers()
-        if len(servers) == 0:
-            print("No servers in DB")
-        else:
-            print("[+] Servers in the DB:")
-            for name, data in servers.items():
-                print("\t{}: {}".format(name, data))
-
-    @need_init
-    def remove_server(self, nodename):
-        print("[+] Removing {}".format(nodename))
-
-        address = self.__get_server_data(nodename)
-        if address is None:
-            print("Server not in DB")
-            exit(1)
-
-        self.__remove_hostkeys(address)
-
-        config = self.__db_read()
-        if config["servers"].get(nodename) is not None:
-            del config["servers"][nodename]
-            self.__db_write(config)
-            print("Server removed")
-
-    def __node_exec(self, cmd, servers):
-        def run(server, cmd):
-            conn = self.__get_connection(server, USER)
-            out, err = self.__run_command(conn, cmd)
+    def __node_exec(self, cmd, nodes):
+        def run(node, cmd):
+            out, err = node.run(cmd)
             return out, err
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        with ThreadPoolExecutor(max_workers=CONFIG.MAX_WORKERS) as executor:
             futures = {}
-            for node, data in servers.items():
-                tmp = executor.submit(run, data["address"], cmd)
+            for node in nodes:
+                tmp = executor.submit(run, node, cmd)
                 futures[tmp] = node
 
             for future in concurrent.futures.as_completed(futures):
@@ -318,6 +57,85 @@ class TorSpray:
                 else:
                     out, err = data
                     yield server, out, err
+
+    def need_init(f, *args, **kwargs):  # *args, **kwargs makes pycharm shut up
+        def magic(self, *args, **kwargs):
+            if self.__first_run:
+                print("Torspray has not been initialized, run torspray init YOUR_EMAIL_ADDR")
+                exit(1)
+            return f(self, *args, **kwargs)
+        return magic
+
+    @need_init
+    def add_server(self, hostname, address, password=None, overwrite=False):
+        print("[+] Adding server {}, password: {}".format(address, password))
+
+        tmp = self.__list_servers(hostname)
+        if not overwrite and len(tmp) > 0:
+            print("{} is already in servers!".format(hostname))
+            return
+
+        if overwrite:
+            remove_hostkeys(address, self.__HOSTKEYS)
+
+        node = Node(hostname, address, self.__HOSTKEYS, self.__PRIVPATH)
+
+        try:
+            node.connect(ignore_missing=True)
+        except NodeAuthException:
+            print("[-] Could not authenticate to the server, either the key is bad or the password")
+            exit(1)
+        except NodeTimeoutException:
+            print("[-] Failed to reach server, try again later")
+            exit(1)
+
+        out, err = node.run("whoami")
+        ret_username = out.strip()
+
+        out, err = node.run("hostname")
+        ret_hostname = out.strip()
+        print("We have:")
+        print("\tusername", ret_username)
+        print("\thostname", ret_hostname)
+
+        self.__db.add_server(hostname, address, overwrite)
+
+        node.disconnect()
+
+    def __get_server(self, nodename):
+        data = self.__db.get_server(nodename)
+        if data is None:
+            print("Server not in DB")
+            exit(1)
+
+        node = Node(nodename, data["address"], self.__HOSTKEYS, self.__PRIVPATH)
+        return node
+
+    def __list_servers(self, filter=None):
+        nodes = self.__db.list_servers(filter=filter)
+        servers = []
+        for nodename, data in nodes.items():
+            node = Node(nodename, data["address"], self.__HOSTKEYS, self.__PRIVPATH)
+            servers.append(node)
+        return servers
+
+    @need_init
+    def list_servers(self):
+        servers = self.__db.list_servers()
+        if len(servers) == 0:
+            print("No servers in DB")
+        else:
+            print("[+] Servers in the DB:")
+            for name, data in servers.items():
+                print("\t{}: {}".format(name, data))
+
+    @need_init
+    def remove_server(self, nodename):
+        print("[+] Removing {}".format(nodename))
+
+        node = self.__get_server(nodename)
+        remove_hostkeys(node.addr, self.__HOSTKEYS)
+        self.__db.remove_server(nodename)
 
     @need_init
     def node_exec(self, node, cmd):
@@ -345,8 +163,9 @@ class TorSpray:
     def status(self):
         print("[+] Status:")
         servers = self.__list_servers()
-        for result in self.__node_exec("whoami", servers):
-            print(result)
+        for node, out, err in self.__node_exec("whoami", servers):
+            print("{}:".format(node))
+            print(out, err)
 
     @need_init
     def netstatus(self):
@@ -371,36 +190,14 @@ class TorSpray:
             pprint.pprint(bw)
             now = dt.now()
             delta = (now-previous).total_seconds()
-            time.sleep(max(0, 1-delta))
+            time.sleep(max(0, 1-int(delta)))
             previous = now
-
-    def __genkey(self, overwrite=False):
-        print("[+] Generating SSH keys")
-        if not overwrite:
-            for name, filename in (
-                            ("private", self.__PRIVKEY),
-                            ("public", self.__PUBKEY)):
-                if os.path.exists(filename):
-                    print("ERROR: {} key {} exists, aborting!".format(name, filename))
-                    exit(1)
-
-        # private part
-        privkey = paramiko.RSAKey.generate(4096)
-        privkey.write_private_key_file(self.__PRIVKEY)
-
-        # public part
-        with open(os.path.expanduser(self.__PUBKEY), "w") as f:
-            f.write("{} {} {}".format(
-                privkey.get_name(),
-                privkey.get_base64(),
-                "torspray-{:x}@home".format(random.randint(2**31, 2**32)),
-            ))
 
     def __showpubkey(self):
         print("##################################################")
         print("#        Use this key when creating the VM:      #")
         print("##################################################")
-        with open(self.__PUBKEY) as f:
+        with open(self.__PUBPATH) as f:
             print(f.read())
 
     @need_init
@@ -417,147 +214,29 @@ class TorSpray:
             print("Contact info has to be an email!")
             exit(1)
 
-        self.__init_config(email)
-        self.__genkey()
+        self.__db.init_config(email)
+
+        self.__generate_key()
         print("Basic configuration written, SSH key generated:")
         self.__showpubkey()
 
-    def __getcontactinfo(self):
-        config = self.__db_read()
-        return config["torspray"]["contactinfo"]
+    def __generate_key(self):
+        print("[+] Generating SSH keys")
+        failed_filename = generate_key(self.__PRIVPATH, self.__PUBPATH)
+        if failed_filename is not None:
+            raise FileExistsError(failed_filename)
 
-    def __spray_runcmd(self, conn, cmd):
-        # TODO: check retvals and err!
-        out, err = self.__run_command(conn, cmd)
-        print("$ {}".format(cmd))
-        print(out)
-        if len(err) > 0:
-            print("ERROR in command {}:".format(cmd))
-            print(err)
-            # exit(1)
-        return out, err
-
-    def __spray_verify_prerequisites(self, conn, conn_ftp):
-        version = None
-        codename = None
-        with conn_ftp.file("/etc/os-release") as f:
-            lines = f.read().decode("utf-8").splitlines()
-            for l in lines:
-                k, v = l.split("=")
-                if k == "NAME":
-                    version = v.strip("\"")
-                    # print("Version: {}".format(version))
-                elif k == "VERSION_CODENAME":
-                    codename = v.strip("\"")
-                    # print("Codename: {}".format(codename))
-        if version is None or codename is None:
-            print("ERROR: Version wasn't found")
-
-        out, err = self.__spray_runcmd(conn, "dpkg --print-architecture")
-        arch = out.strip()
-        return version, codename, arch
-
-    def __spray_enable_updates(self, conn, conn_ftp):
-        """
-        Based on: https://community.torproject.org/relay/setup/guard/debian-ubuntu/updates/
-        """
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get upgrade -y")
-
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get install -y unattended-upgrades apt-listchanges")
-
-        with conn_ftp.file("/etc/apt/apt.conf.d/50unattended-upgrades", "wt") as f:
-            f.write(UNATTENDED_UPGRADES_CFG)
-
-        with conn_ftp.file("/etc/apt/apt.conf.d/20auto-upgrades", "wt") as f:
-            f.write(UNATTENDED_AUTO_CFG)
-
-        # self.__spray_runcmd(conn, "unattended-upgrade --debug --dry-run")
-
-    def __spray_configure_tor_repo(self, conn, conn_ftp, codename):
-        """
-        Based on: https://support.torproject.org/apt/tor-deb-repo/
-        """
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get install -y apt-transport-https gpg")
-
-        with conn_ftp.file("/etc/apt/sources.list.d/tor.list", "wt") as f:
-            config = TOR_SOURCES_LIST.replace("###DISTRIBUTION###",
-                                              codename)
-            f.write(config)
-
-        self.__spray_runcmd(conn, "wget -qO- https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc | gpg --dearmor | tee /usr/share/keyrings/tor-archive-keyring.gpg >/dev/null")
-
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get update")
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get install -y tor deb.torproject.org-keyring")
-
-    def __spray_install_packages(self, conn, conn_ftp, contactinfo):
-        """
-        Based on: https://community.torproject.org/relay/setup/bridge/debian-ubuntu/
-        """
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get update")
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get install -y tor")
-        self.__spray_runcmd(conn, "export DEBIAN_FRONTEND=noninteractive; apt-get install -y obfs4proxy")
-
-        with conn_ftp.file("/etc/tor/torrc", "wt") as f:
-            config = CONFIG_TORRC
-            for old, new in (
-                            ("###TODO1###", str(random.randint(*PORTRANGE))),
-                            ("###TODO2###", str(random.randint(*PORTRANGE))),
-                            ("###CONTACTINFO###", contactinfo),
-                            # TODO: support this in the future
-                            # ("###NICKNAME###", nickname),
-            ):
-                config = config.replace(old, new)
-            f.write(config)
-
-        self.__spray_runcmd(conn, "setcap cap_net_bind_service=+ep /usr/bin/obfs4proxy")
-
-        for filename in ["/lib/systemd/system/tor@default.service",
-                         "/lib/systemd/system/tor@.service"]:
-            with conn_ftp.file(filename, "ra") as f:
-                f.seek(os.SEEK_SET, 0)
-                contents = f.read().decode("utf-8")
-                contents = contents.replace("NoNewPrivileges=yes", "NoNewPrivileges=no")
-
-                f.truncate(0)
-                f.write(contents)
-
-        self.__spray_runcmd(conn, "systemctl daemon-reload")
-
-        self.__spray_runcmd(conn, "systemctl enable --now tor.service")
-        self.__spray_runcmd(conn, "systemctl restart tor.service")
-
-        # test, check logs:
-        # TODO
-        # self.__spray_runcmd(conn, "journalctl -e -u tor@default | grep \"Self-testing indicates\"")
+    @need_init
+    def copyfile(self, nodename, direction, src, dst):
+        node = self.__get_server(nodename)
+        node.copyfile(direction, src, dst)
 
     @need_init
     def spray(self, hostname):
-        server = self.__get_server_data(hostname)
-        contactinfo = self.__getcontactinfo()
-        conn = self.__get_connection(server["address"], USER)
-        conn_ftp = conn.open_sftp()
-
-        print("[+] Spray verifying versions")
-        version, codename, arch = self.__spray_verify_prerequisites(conn, conn_ftp)
-        if version != "Debian GNU/Linux" or codename != "bullseye":
-            print("ERROR This Distribution/version is unsupported: version: {}, codename: {}".format(version, codename))
-            exit(1)
-        if arch not in ("amd64",):
-            print("ERROR This architecture is not supported: {}".format(arch))
-            exit(1)
-        print("\tversion: {}\n\tcodename: {}\n\tarch: {}".format(version, codename, arch))
-
-        print("[+] Spray enabling updates")
-        self.__spray_enable_updates(conn, conn_ftp)
-
-        print("[+] Spray configuring tor repo")
-        self.__spray_configure_tor_repo(conn, conn_ftp, codename)
-
-        print("[+] Spray installing packages")
-        self.__spray_install_packages(conn, conn_ftp, contactinfo)
-
-        conn_ftp.close()
-        conn.close()
+        contactinfo = self.__db.getcontactinfo()
+        node = self.__get_server(hostname)
+        s = Debian11Bridge(contactinfo, node, CONFIG.PORTRANGE)
+        s.spray()
 
     def __parse_args(self):
         # if --confdir is set use it
@@ -583,7 +262,7 @@ class TorSpray:
         parser_add.add_argument('hostname', type=str, help='hostname')
         parser_add.add_argument('address', type=str, help='address')
         parser_add.add_argument('--password', type=str, required=False, help='password')
-        parser_add.add_argument('--overwrite', type=bool, required=False, help='overwrite')
+        parser_add.add_argument('--overwrite', action='store_true', required=False, help='overwrite')
         parser_add.set_defaults(func='add')
 
         parser_list = subparsers.add_parser('list', help='list nodes')
@@ -622,9 +301,7 @@ class TorSpray:
         parser_spray.add_argument('hostname', type=str)
         parser_spray.set_defaults(func='spray')
 
-        # do parse
         args = self.__parser.parse_args()
-        # print("DBG", args)
         return args
 
     def main(self):
