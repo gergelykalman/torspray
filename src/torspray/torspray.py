@@ -67,7 +67,7 @@ class TorSpray:
         return magic
 
     @need_init
-    def add_server(self, hostname, address, password=None, overwrite=False):
+    def add_server(self, hostname, address, password=None, keyfile=None, overwrite=False):
         print("[+] Adding server {}, password: {}".format(address, password))
 
         tmp = self.__list_servers(hostname)
@@ -78,7 +78,11 @@ class TorSpray:
         if overwrite:
             remove_hostkeys(address, self.__HOSTKEYS)
 
-        node = Node(hostname, address, self.__HOSTKEYS, self.__PRIVPATH)
+        if keyfile is None:
+            pkeypath = self.__PRIVPATH
+        else:
+            pkeypath = keyfile
+        node = Node(hostname, address, self.__HOSTKEYS, pkeypath)
 
         try:
             node.connect(ignore_missing=True)
@@ -131,14 +135,22 @@ class TorSpray:
 
     @need_init
     def remove_server(self, nodename):
-        print("[+] Removing {}".format(nodename))
-
         node = self.__get_server(nodename)
         remove_hostkeys(node.addr, self.__HOSTKEYS)
         self.__db.remove_server(nodename)
 
     @need_init
-    def node_exec(self, node, cmd):
+    def clear_all(self):
+        resp = input("[!] You are about to remove EVERY server, are you sure? (y/N):")
+        if resp not in ("y", "Y"):
+            print("Aborting")
+            exit(1)
+
+        for s in self.__list_servers():
+            self.remove_server(s.name)
+
+    @need_init
+    def exec(self, node, cmd):
         print("[+] Execing: {}".format(cmd))
         servers = self.__list_servers(filter=node)
         if len(servers) == 0:
@@ -151,13 +163,48 @@ class TorSpray:
             print(out)
 
     @need_init
-    def cluster_exec(self, cmd):
-        print("[+] Execing: {}".format(cmd))
-        servers = self.__list_servers()
-        for result in self.__node_exec(cmd, servers):
-            server, out, err = result
-            print("{}:".format(server))
-            print(out)
+    def importhosts(self, filename, password=None, keyfile=None, overwrite=False):
+        validlines = 0
+        nodelist = []
+        with open(filename, "r") as f:
+            for line_raw in f:
+                line = line_raw.strip()
+
+                # ignore empty lines and lines starting with #
+                if line == '' or line[0] == "#":
+                    continue
+
+                validlines += 1
+
+                # hostname: alphanum, -, ., must begin with alpha
+                match = re.match(r'^(?P<address>.*?)\s+(?P<name>[a-zA-Z][0-9a-zA-Z-.]*)', line)
+                if match is None:
+                    print("ERROR: Unable to match line: {}".format(line))
+                    continue
+
+                matchdict = match.groupdict()
+                nodelist.append((matchdict["name"], matchdict["address"]))
+
+        if len(nodelist) != validlines:
+            print("Nodelist doesn't match valid lines: {} != {}".format(len(nodelist), validlines))
+
+        print("[+] Loaded {} hosts:".format(len(nodelist)))
+        for name, addr in nodelist:
+            print("\t{}: {}".format(name, addr))
+
+        for name, addr in nodelist:
+            self.add_server(name, addr, password=password, keyfile=keyfile, overwrite=overwrite)
+
+
+    @need_init
+    def exporthosts(self, filename):
+        buf = ""
+        for server in self.__list_servers():
+            buf += "{} {}\n".format(server.addr, server.name)
+
+        with open(filename, "w") as f:
+            f.write(buf)
+
 
     @need_init
     def status(self):
@@ -262,7 +309,9 @@ class TorSpray:
         parser_add.add_argument('hostname', type=str, help='hostname')
         parser_add.add_argument('address', type=str, help='address')
         parser_add.add_argument('--password', type=str, required=False, help='password')
+        parser_add.add_argument('--keyfile', type=str, required=False, help='keyfile')
         parser_add.add_argument('--overwrite', action='store_true', required=False, help='overwrite')
+
         parser_add.set_defaults(func='add')
 
         parser_list = subparsers.add_parser('list', help='list nodes')
@@ -271,6 +320,20 @@ class TorSpray:
         parser_add = subparsers.add_parser('remove', help='remove node from torspray')
         parser_add.add_argument('hostname', type=str, help='hostname')
         parser_add.set_defaults(func='remove')
+
+        parser_clearall = subparsers.add_parser('clear_all', help='remove all servers')
+        parser_clearall.set_defaults(func='clear_all')
+
+        parser_importhosts = subparsers.add_parser('importhosts', help='import many hosts from file')
+        parser_importhosts.add_argument('filename', type=str, help='filename containing "ip name" pairs, like in /etc/hosts')
+        parser_importhosts.add_argument('--password', type=str, required=False, help='password')
+        parser_importhosts.add_argument('--keyfile', type=str, required=False, help='keyfile')
+        parser_importhosts.add_argument('--overwrite', action='store_true', required=False, help='overwrite')
+        parser_importhosts.set_defaults(func='importhosts')
+
+        parser_exporthosts = subparsers.add_parser('exporthosts', help='export hosts to file')
+        parser_exporthosts.add_argument('filename', type=str, help='filename to dump hosts to')
+        parser_exporthosts.set_defaults(func='exporthosts')
 
         parser_status = subparsers.add_parser('status', help='list node status')
         parser_status.set_defaults(func='status')
@@ -309,11 +372,17 @@ class TorSpray:
         if func == "init":
             self.init(self.__args.email)
         elif func == "add":
-            self.add_server(self.__args.hostname, self.__args.address, self.__args.password, self.__args.overwrite)
+            self.add_server(self.__args.hostname, self.__args.address, self.__args.password, self.__args.keyfile, self.__args.overwrite)
         elif func == "list":
             self.list_servers()
         elif func == "remove":
             self.remove_server(self.__args.hostname)
+        elif func == "clear_all":
+            self.clear_all()
+        elif func == "importhosts":
+            self.importhosts(self.__args.filename, self.__args.password, self.__args.keyfile, self.__args.overwrite)
+        elif func == "exporthosts":
+            self.exporthosts(self.__args.filename)
         elif func == "status":
             self.status()
         elif func == "netstatus":
@@ -323,9 +392,9 @@ class TorSpray:
         elif func == "copyfile":
             self.copyfile(self.__args.server, self.__args.direction, self.__args.src, self.__args.dst)
         elif func == "node-exec":
-            self.node_exec(self.__args.hostname, self.__args.cmd)
+            self.exec(self.__args.hostname, self.__args.cmd)
         elif func == "cluster-exec":
-            self.cluster_exec(self.__args.cmd)
+            self.exec(None, self.__args.cmd)
         elif func == "spray":
             self.spray(self.__args.hostname)
         else:

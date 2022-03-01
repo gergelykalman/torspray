@@ -53,60 +53,23 @@ ContactInfo <###CONTACTINFO###>
 #Nickname ###NICKNAME###
 """
 
+from torspray.modules.classes import SprayBase
 
-class Debian11Bridge:
+
+class Debian11Bridge(SprayBase):
     def __init__(self, contactinfo, node, portrange):
         self.contactinfo = contactinfo
-        self.node = node
         self.portrange = portrange
 
         self.env = {
             "DEBIAN_FRONTEND": "noninteractive"
         }
-
-    def __run(self, cmd, env_param=None):
-        # TODO: check retvals and err!
-        if env_param is None:
-            env = self.env
-        else:
-            env = env_param
-
-        out, err = self.node.run(cmd, env)
-        print("$ {}".format(cmd))
-        print(out)
-        if len(err) > 0:
-            print("ERROR in command {}:".format(cmd))
-            print(err)
-            # exit(1)
-        return out, err
-
-    def __get_osrelease(self):
-        version = None
-        codename = None
-        with self.node.file("/etc/os-release") as f:
-            lines = f.read().decode("utf-8").splitlines()
-            for l in lines:
-                k, v = l.split("=")
-                if k == "NAME":
-                    version = v.strip("\"")
-                    # print("Version: {}".format(version))
-                elif k == "VERSION_CODENAME":
-                    codename = v.strip("\"")
-                    # print("Codename: {}".format(codename))
-        if version is None or codename is None:
-            print("ERROR: Version wasn't found")
-
-        return version, codename
-
-    def __get_arch(self):
-        out, err = self.node.run("dpkg --print-architecture")
-        arch = out.strip()
-        return arch
+        super().__init__(node, self.env)
 
     def spray(self):
         print("[+] Spray verifying versions")
-        version, codename = self.__get_osrelease()
-        arch = self.__get_arch()
+        version, codename = self.get_osrelease()
+        arch = self.get_arch()
 
         if version != "Debian GNU/Linux" or codename != "bullseye":
             print("ERROR This Distribution/version is unsupported: version: {}, codename: {}".format(version, codename))
@@ -118,72 +81,56 @@ class Debian11Bridge:
 
         print("\tversion: {}\n\tcodename: {}\n\tarch: {}".format(version, codename, arch))
 
-
-        ### Based on: https://community.torproject.org/relay/setup/guard/debian-ubuntu/updates/
+        # Based on: https://community.torproject.org/relay/setup/guard/debian-ubuntu/updates/
         print("[+] Spray enabling updates")
-        self.__run("apt-get update")
-        self.__run("apt-get upgrade -y")
-        self.__run("apt-get install -y unattended-upgrades apt-listchanges")
+        self.run("apt-get update")
+        self.run("apt-get upgrade -y")
+        self.run("apt-get install -y unattended-upgrades apt-listchanges")
 
-        with self.node.file("/etc/apt/apt.conf.d/50unattended-upgrades", "wt") as f:
-            f.write(UNATTENDED_UPGRADES_CFG)
+        self.writeconfig("/etc/apt/apt.conf.d/50unattended-upgrades", UNATTENDED_UPGRADES_CFG)
+        self.writeconfig("/etc/apt/apt.conf.d/20auto-upgrades", UNATTENDED_AUTO_CFG)
+        # self.run(conn, "unattended-upgrade --debug --dry-run")
 
-        with self.node.file("/etc/apt/apt.conf.d/20auto-upgrades", "wt") as f:
-            f.write(UNATTENDED_AUTO_CFG)
-
-        # self.__run(conn, "unattended-upgrade --debug --dry-run")
-
-
-        ### Based on: https://support.torproject.org/apt/tor-deb-repo/
+        # Based on: https://support.torproject.org/apt/tor-deb-repo/
         print("[+] Spray configuring tor repo")
-        self.__run("apt-get install -y apt-transport-https gpg")
+        self.run("apt-get install -y apt-transport-https gpg")
 
-        with self.node.file("/etc/apt/sources.list.d/tor.list", "wt") as f:
-            config = TOR_SOURCES_LIST.replace("###DISTRIBUTION###",
-                                              codename)
-            f.write(config)
+        self.writeconfig("/etc/apt/sources.list.d/tor.list", TOR_SOURCES_LIST,
+                         {
+                             "###DISTRIBUTION###": codename
+                         })
 
-        self.__run("wget -qO- https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc | gpg --dearmor | tee /usr/share/keyrings/tor-archive-keyring.gpg >/dev/null")
+        self.run("wget -qO- https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc | gpg --dearmor | tee /usr/share/keyrings/tor-archive-keyring.gpg >/dev/null")
 
-        self.__run("apt-get update")
-        self.__run("apt-get install -y tor deb.torproject.org-keyring")
+        self.run("apt-get update")
+        self.run("apt-get install -y tor deb.torproject.org-keyring")
 
-
-        ### Based on: https://community.torproject.org/relay/setup/bridge/debian-ubuntu/
+        # Based on: https://community.torproject.org/relay/setup/bridge/debian-ubuntu/
         print("[+] Spray installing packages")
-        self.__run("apt-get update")
-        self.__run("apt-get install -y tor")
-        self.__run("apt-get install -y obfs4proxy")
+        self.run("apt-get update")
+        self.run("apt-get install -y tor")
+        self.run("apt-get install -y obfs4proxy")
 
-        with self.node.file("/etc/tor/torrc", "wt") as f:
-            config = CONFIG_TORRC
-            for old, new in (
-                            ("###TODO1###", str(random.randint(*self.portrange))),
-                            ("###TODO2###", str(random.randint(*self.portrange))),
-                            ("###CONTACTINFO###", self.contactinfo),
+        self.writeconfig("/etc/tor/torrc", CONFIG_TORRC,
+                         {
+                            "###TODO1###": str(random.randint(*self.portrange)),
+                            "###TODO2###": str(random.randint(*self.portrange)),
+                            "###CONTACTINFO###": self.contactinfo,
                             # TODO: support this in the future
                             # ("###NICKNAME###", nickname),
-            ):
-                config = config.replace(old, new)
-            f.write(config)
+                         })
 
-        self.__run("setcap cap_net_bind_service=+ep /usr/bin/obfs4proxy")
+        self.run("setcap cap_net_bind_service=+ep /usr/bin/obfs4proxy")
 
         for filename in ["/lib/systemd/system/tor@default.service",
                          "/lib/systemd/system/tor@.service"]:
-            with self.node.file(filename, "ra") as f:
-                f.seek(os.SEEK_SET, 0)
-                contents = f.read().decode("utf-8")
-                contents = contents.replace("NoNewPrivileges=yes", "NoNewPrivileges=no")
+            self.editconfig(filename, "NoNewPrivileges=yes", "NoNewPrivileges=no")
 
-                f.truncate(0)
-                f.write(contents)
+        self.run("systemctl daemon-reload")
 
-        self.__run("systemctl daemon-reload")
-
-        self.__run("systemctl enable --now tor.service")
-        self.__run("systemctl restart tor.service")
+        self.run("systemctl enable --now tor.service")
+        self.run("systemctl restart tor.service")
 
         # test, check logs:
         # TODO
-        # self.__run(conn, "journalctl -e -u tor@default | grep \"Self-testing indicates\"")
+        # self.run(conn, "journalctl -e -u tor@default | grep \"Self-testing indicates\"")
