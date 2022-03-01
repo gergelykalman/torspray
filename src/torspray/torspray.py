@@ -10,11 +10,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import argparse
 
-from modules.config import CONFIG
-from modules.db import DB
-from modules.ssh_keys import generate_key, remove_hostkeys
-from modules.node import Node, NodeAuthException, NodeTimeoutException
-from sprays.debian_11_torbridge.spray import Debian11Bridge
+from torspray.modules.config import CONFIG
+from torspray.modules.db import DB
+from torspray.modules.ssh_keys import generate_key, remove_hostkeys
+from torspray.modules.node import Node, NodeAuthException, NodeTimeoutException
+from torspray.sprays.debian_11_torbridge.spray import Debian11Bridge
 
 
 class TorSpray:
