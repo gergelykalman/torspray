@@ -214,30 +214,78 @@ class TorSpray:
             print("{}:".format(node))
             print(out, err)
 
+    def __parse_ifconfig(self, buf):
+        data = {}
+        for line in buf.split("\n"):
+            # TODO: this is very brittle
+            match = re.search(r" +(?P<direction>[RT]X) packets (?P<packets>\d+) *bytes (?P<bytes>\d+)", line)
+            if match is not None:
+                matchdict = match.groupdict()
+#                data[match["direction"]] = {
+#                    "packets": matchdict["packets"],
+#                    "bytes": matchdict["bytes"],
+#                }
+                data[match["direction"]] = int(matchdict["bytes"])
+        return data
+
     @need_init
-    def netstatus(self):
-        print("[+] Status:")
+    def netstatus(self, interval):
+        print("[+] Status every {}s:".format(interval))
         previous = dt.now()
-        bw = {}
+        last = None
         servers = self.__list_servers()
+        servernames = [s.name for s in servers]
         while True:
+            current = {}
             for result in self.__node_exec("ifconfig eth0", servers):
                 server, out, err = result
-                for line in out.split("\n"):
-                    # TODO: this is very brittle
-                    match = re.search(r" +(?P<direction>[RT]X) packets (?P<packets>\d+) *bytes (?P<bytes>\d+)", line)
-                    if match is not None:
-                        matchdict = match.groupdict()
-                        if bw.get(server) is None:
-                            bw[server] = {}
-                        bw[server][match["direction"]] = {
-                                "packets": matchdict["packets"],
-                                "bytes": matchdict["bytes"],
-                            }
-            pprint.pprint(bw)
+                data = self.__parse_ifconfig(out)
+                current[server.name] = data
+
+            # calculate delta
             now = dt.now()
             delta = (now-previous).total_seconds()
-            time.sleep(max(0, 1-int(delta)))
+
+            # print status
+            all_tx = 0
+            all_rx = 0
+            for name in servernames:
+                if last is None:
+                    continue
+
+                old = last.get(name, None)
+                new = current.get(name, {})
+                old_rx = old.get("RX", 0)
+                new_rx = new.get("RX", 0)
+                old_tx = old.get("TX", 0)
+                new_tx = new.get("TX", 0)
+
+                # TODO: make kbit/mbit etc calculation adaptive
+                diff_rx = (new_rx - old_rx) * 8 / 1024 / delta
+                diff_tx = (new_tx - old_tx) * 8 / 1024 / delta
+                #print("{} RX: {}, {} TX: {} {}".format(name, old_rx, new_rx, old_tx, new_tx))
+
+                total_rx = new_rx / 1024/1024/1024
+                total_tx = new_tx / 1024/1024/1024
+
+                print("{} RX: {:10.2f} kbit/s TX: {:10.2f} kbit/s - total: RX: {:10.2f} GB TX: {:10.2f} GB".format(name, diff_rx, diff_tx, total_rx, total_tx))
+
+                all_tx += total_tx
+                all_rx += total_rx
+
+            # calculate time to sleep
+            sleeptime = max(0, interval-delta)
+
+            if last is not None:
+                print()
+                print("date: {}, delta: {:.2f}, sleep time: {:.2f}     TOTAL: RX: {:10.2f} GB TX: {:10.2f} GB".format(now, delta, sleeptime, all_rx, all_tx))
+                print("="*50)
+
+            last = current
+
+            # sleep
+            # TODO: use sleeptime here, as we have to compensate for the time it takes the fetch to run
+            time.sleep(interval)
             previous = now
 
     def __showpubkey(self):
@@ -339,6 +387,7 @@ class TorSpray:
         parser_status.set_defaults(func='status')
 
         parser_netstatus = subparsers.add_parser('netstatus', help='list node network status')
+        parser_netstatus.add_argument('--interval', type=int, default=5, help='interval in seconds')
         parser_netstatus.set_defaults(func='netstatus')
 
         parser_showpubkey = subparsers.add_parser('showpubkey', help='show public key signature for VM creation')
@@ -386,7 +435,7 @@ class TorSpray:
         elif func == "status":
             self.status()
         elif func == "netstatus":
-            self.netstatus()
+            self.netstatus(self.__args.interval)
         elif func == "showpubkey":
             self.showpubkey()
         elif func == "copyfile":
