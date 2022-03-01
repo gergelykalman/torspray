@@ -15,14 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import paramiko
 import argparse
 
-#BASE_DIR = os.path.join(os.path.dirname(__file__), ".torspray")
-# TODO: do this more properly
-BASE_DIR = os.path.join(os.getcwd(), ".torspray")
 VERSION = 0.1
-CONFIGNAME = os.path.join(BASE_DIR, "torspray.json")
-HOSTKEYS = os.path.join(BASE_DIR, "hostkeys")
-PRIVKEY = os.path.join(BASE_DIR, "torspray_key")
-PUBKEY = os.path.join(BASE_DIR, "torspray_key.pub")
 PORTRANGE = (1025, 65534)
 USER = "root"
 TIMEOUT = 30
@@ -76,6 +69,21 @@ ContactInfo <###CONTACTINFO###>
 
 class TorSpray:
     def __init__(self):
+        # set os stuff
+        self.__CWD = os.getcwd()
+
+        # parse arguments
+        self.__parser = None
+        self.__args = self.__parse_args()
+
+        # config paths
+        self.__CONF_DIR = self.__args.confdir
+        self.__CONFIGNAME = os.path.join(self.__CONF_DIR, "torspray.json")
+        self.__HOSTKEYS = os.path.join(self.__CONF_DIR, "hostkeys")
+        self.__PRIVKEY = os.path.join(self.__CONF_DIR, "torspray_key")
+        self.__PUBKEY = os.path.join(self.__CONF_DIR, "torspray_key.pub")
+
+        # vars
         self.__first_run = self.__is_first_run()
         self.__pkey = None
 
@@ -83,9 +91,9 @@ class TorSpray:
         pkey = None
         while True:
             try:
-                pkey = paramiko.RSAKey.from_private_key_file(PRIVKEY)
+                pkey = paramiko.RSAKey.from_private_key_file(self.__PRIVKEY)
             except FileNotFoundError:
-                print("ERROR: SSH key files not found in {}".format(PRIVKEY))
+                print("ERROR: SSH key files not found in {}".format(self.__PRIVKEY))
                 resp = input("Would you like me to genreate a new keypair? (y/N): ")
                 if resp in ("y", "Y"):
                     self.__genkey()
@@ -99,7 +107,7 @@ class TorSpray:
 
     def __connect_ssh(self, server, username, ignore_missing=False):
         client = paramiko.SSHClient()
-        client.load_host_keys(HOSTKEYS)
+        client.load_host_keys(self.__HOSTKEYS)
 
         # should we add missing keys?
         if ignore_missing:
@@ -121,14 +129,14 @@ class TorSpray:
             return False
 
     def __init_config(self, contactinfo):
-        print("[+] Initializing torspray directory: {}".format(BASE_DIR))
+        print("[+] Initializing torspray directory: {}".format(self.__CONF_DIR))
 
         try:
-            os.makedirs(BASE_DIR, 0o750)
+            os.makedirs(self.__CONF_DIR, 0o750)
         except FileExistsError:
             pass
 
-        with open(CONFIGNAME, "w") as f:
+        with open(self.__CONFIGNAME, "w") as f:
             config = {
                 "servers": {},
                 "torspray": {
@@ -138,16 +146,16 @@ class TorSpray:
             }
             json.dump(config, f, sort_keys=True, indent=4)
 
-        with open(HOSTKEYS, "w") as f:
+        with open(self.__HOSTKEYS, "w") as f:
             pass
 
     def __db_read(self):
-        with open(CONFIGNAME, "r") as f:
+        with open(self.__CONFIGNAME, "r") as f:
             config = json.load(f)
         return config
 
     def __db_write(self, config):
-        with open(CONFIGNAME, "w") as f:
+        with open(self.__CONFIGNAME, "w") as f:
             json.dump(config, f, sort_keys=True, indent=4)
 
     def __get_connection(self, addr, user, ignore_missing=False):
@@ -220,10 +228,10 @@ class TorSpray:
 
     def __remove_hostkeys(self, address):
         print("Clearing host from hostkeys")
-        hostkeys = paramiko.HostKeys(HOSTKEYS)
+        hostkeys = paramiko.HostKeys(self.__HOSTKEYS)
         if hostkeys.get(address) is not None:
             del hostkeys[address]
-        hostkeys.save(HOSTKEYS)
+        hostkeys.save(self.__HOSTKEYS)
 
     @need_init
     def add_server(self, hostname, address, password=None, overwrite=False):
@@ -370,18 +378,18 @@ class TorSpray:
         print("[+] Generating SSH keys")
         if not overwrite:
             for name, filename in (
-                            ("private", PRIVKEY),
-                            ("public", PUBKEY)):
+                            ("private", self.__PRIVKEY),
+                            ("public", self.__PUBKEY)):
                 if os.path.exists(filename):
                     print("ERROR: {} key {} exists, aborting!".format(name, filename))
                     exit(1)
 
         # private part
         privkey = paramiko.RSAKey.generate(4096)
-        privkey.write_private_key_file(PRIVKEY)
+        privkey.write_private_key_file(self.__PRIVKEY)
 
         # public part
-        with open(os.path.expanduser(PUBKEY), "w") as f:
+        with open(os.path.expanduser(self.__PUBKEY), "w") as f:
             f.write("{} {} {}".format(
                 privkey.get_name(),
                 privkey.get_base64(),
@@ -392,7 +400,7 @@ class TorSpray:
         print("##################################################")
         print("#        Use this key when creating the VM:      #")
         print("##################################################")
-        with open(PUBKEY) as f:
+        with open(self.__PUBKEY) as f:
             print(f.read())
 
     @need_init
@@ -551,10 +559,21 @@ class TorSpray:
         conn_ftp.close()
         conn.close()
 
-    def parse_args(self):
-        parser = argparse.ArgumentParser()
-        subparsers = parser.add_subparsers()
-        parser.set_defaults(func=parser.print_help)
+    def __parse_args(self):
+        # if --confdir is set use it
+        # if not and CONFDIR is set in env, use it
+        # if not fall back to $(pwd)/.torspray
+        confdir_default = os.environ.get(
+            "CONFDIR",
+            os.path.join(self.__CWD, ".torspray")
+        )
+
+        self.__parser = argparse.ArgumentParser()
+        subparsers = self.__parser.add_subparsers()
+        self.__parser.set_defaults(func=self.__parser.print_help)
+        self.__parser.add_argument('--confdir', type=str, required=False,
+                                   default=confdir_default,
+                                   help='Set torspray config directory')
 
         parser_init = subparsers.add_parser('init', help='sets contact email for tor')
         parser_init.add_argument('email', type=str, help='email address')
@@ -604,36 +623,36 @@ class TorSpray:
         parser_spray.set_defaults(func='spray')
 
         # do parse
-        args = parser.parse_args()
+        args = self.__parser.parse_args()
         # print("DBG", args)
-
-        if args.func == "init":
-            self.init(args.email)
-        elif args.func == "add":
-            self.add_server(args.hostname, args.address, args.password, args.overwrite)
-        elif args.func == "list":
-            self.list_servers()
-        elif args.func == "remove":
-            self.remove_server(args.hostname)
-        elif args.func == "status":
-            self.status()
-        elif args.func == "netstatus":
-            self.netstatus()
-        elif args.func == "showpubkey":
-            self.showpubkey()
-        elif args.func == "copyfile":
-            self.copyfile(args.server, args.direction, args.src, args.dst)
-        elif args.func == "node-exec":
-            self.node_exec(args.hostname, args.cmd)
-        elif args.func == "cluster-exec":
-            self.cluster_exec(args.cmd)
-        elif args.func == "spray":
-            self.spray(args.hostname)
-        else:
-            parser.print_help()
+        return args
 
     def main(self):
-        self.parse_args()
+        func = self.__args.func
+        if func == "init":
+            self.init(self.__args.email)
+        elif func == "add":
+            self.add_server(self.__args.hostname, self.__args.address, self.__args.password, self.__args.overwrite)
+        elif func == "list":
+            self.list_servers()
+        elif func == "remove":
+            self.remove_server(self.__args.hostname)
+        elif func == "status":
+            self.status()
+        elif func == "netstatus":
+            self.netstatus()
+        elif func == "showpubkey":
+            self.showpubkey()
+        elif func == "copyfile":
+            self.copyfile(self.__args.server, self.__args.direction, self.__args.src, self.__args.dst)
+        elif func == "node-exec":
+            self.node_exec(self.__args.hostname, self.__args.cmd)
+        elif func == "cluster-exec":
+            self.cluster_exec(self.__args.cmd)
+        elif func == "spray":
+            self.spray(self.__args.hostname)
+        else:
+            self.__parser.print_help()
 
 
 def main():
