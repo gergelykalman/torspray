@@ -146,3 +146,39 @@ date: 2022-03-02 00:37:48.537278, delta: 1.17, sleep time: 0.00     TOTAL: RX:  
 ==================================================
 ...
 ```
+
+Executing a pty actual shell on a node:
+```bash
+top - 14:33:41 up 4 days, 15:06,  1 user,  load average: 0.03, 0.01, 0.00
+Tasks:  83 total,   1 running,  82 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
+MiB Mem :   1934.6 total,    934.8 free,    249.3 used,    750.5 buff/cache
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.   1542.8 avail Mem
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+      1 root      20   0  164352  10896   7792 S   0.0   0.6   0:16.08 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.09 kthreadd
+      3 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 rcu_gp
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 rcu_par_gp
+      6 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/0:0H-events_highpri
+      9 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 mm_percpu_wq
+     10 root      20   0       0      0      0 S   0.0   0.0   0:00.00 rcu_tasks_rude_
+     11 root      20   0       0      0      0 S   0.0   0.0   0:00.00 rcu_tasks_trace
+     12 root      20   0       0      0      0 S   0.0   0.0   0:22.70 ksoftirqd/0
+     13 root      20   0       0      0      0 I   0.0   0.0   0:09.81 rcu_sched
+     14 root      rt   0       0      0      0 S   0.0   0.0   0:01.73 migration/0
+     15 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/0
+     16 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/1
+     17 root      rt   0       0      0      0 S   0.0   0.0   0:01.78 migration/1
+     18 root      20   0       0      0      0 S   0.0   0.0   0:07.93 ksoftirqd/1
+     20 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/1:0H-events_highpri
+     23 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kdevtmpfs
+     24 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 netns
+     25 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kauditd
+     26 root      20   0       0      0      0 S   0.0   0.0   0:00.09 khungtaskd
+     27 root      20   0       0      0      0 S   0.0   0.0   0:00.00 oom_reaper
+     28 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 writeback
+     29 root      20   0       0      0      0 S   0.0   0.0   0:10.32 kcompactd0
+     30 root      25   5       0      0      0 S   0.0   0.0   0:00.00 ksm
+...
+```

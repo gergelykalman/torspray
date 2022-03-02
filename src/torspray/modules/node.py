@@ -95,3 +95,8 @@ class Node:
 
         # WARNING: anything that comes out here can be MALICIOUS!
         return out, err
+
+    def invoke_shell(self, term="vt100", width=80, height=24):
+        self.__connect_ssh()
+        chan = self.__conn.invoke_shell(term=term, width=width, height=height)
+        return chan

@@ -1,6 +1,7 @@
+import sys
 import os
 import re
-import pprint
+import shutil
 import time
 from datetime import datetime as dt, timedelta as td
 
@@ -161,6 +162,58 @@ class TorSpray:
             server, out, err = result
             print("{}:".format(server))
             print(out)
+
+    @need_init
+    def shell(self, nodename):
+        print("[+] Starting shell on: {}".format(nodename))
+
+        node = self.__get_server(nodename)
+
+        term = os.environ.get("TERM")
+        cols, lines = shutil.get_terminal_size()
+
+        shell = node.invoke_shell(term=term, width=cols, height=lines)
+        shell.settimeout(0)
+
+        # nobody else needs these, so we import it here
+        # TODO: move these to a TUI module later
+        import termios
+        import tty
+        import select
+        import socket
+
+        old = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            tty.setcbreak(sys.stdin.fileno())
+
+            abort = False
+            while not abort:
+                readable, writable, error = select.select([sys.stdin, shell], [], [])
+                for fd in readable:
+                    if fd == shell:
+                        try:
+                            buf = shell.recv(4096).decode("utf-8")
+                            if len(buf) == 0:
+                                abort = True
+                                break
+                            sys.stdout.write(buf)
+                            sys.stdout.flush()
+                        except socket.timeout:
+                            pass
+                    elif fd == sys.stdin:
+                        char = sys.stdin.read(1)
+                        if len(char) == 0:
+                            abort = True
+                            break
+                        shell.send(char)
+                    else:
+                        # raise ValueError("unexpected fd ({}) is readable in select".format(fd))
+                        pass
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+
+        print("Done")
 
     @need_init
     def importhosts(self, filename, password=None, keyfile=None, overwrite=False):
@@ -409,6 +462,10 @@ class TorSpray:
         parser_node_exec.add_argument('cmd', type=str)
         parser_node_exec.set_defaults(func='node-exec')
 
+        parser_shell_exec = subparsers.add_parser('shell', help='spawn pty shell on the node')
+        parser_shell_exec.add_argument('hostname', type=str)
+        parser_shell_exec.set_defaults(func='shell')
+
         parser_spray = subparsers.add_parser('spray', help='initialize the node as a tor bridge')
         parser_spray.add_argument('hostname', type=str)
         parser_spray.set_defaults(func='spray')
@@ -442,6 +499,8 @@ class TorSpray:
             self.copyfile(self.__args.server, self.__args.direction, self.__args.src, self.__args.dst)
         elif func == "node-exec":
             self.exec(self.__args.hostname, self.__args.cmd)
+        elif func == "shell":
+            self.shell(self.__args.hostname)
         elif func == "cluster-exec":
             self.exec(None, self.__args.cmd)
         elif func == "spray":
