@@ -132,7 +132,7 @@ class TorSpray:
         else:
             print("[+] Servers in the DB:")
             for name, data in servers.items():
-                print("\t{}: {}".format(name, data))
+                print("\t{} - {}".format(name, data))
 
     @need_init
     def remove_server(self, nodename):
@@ -355,7 +355,8 @@ class TorSpray:
     def init(self, email):
         # TODO: validate email properly
         if not self.__first_run:
-            print("[-] Torspray init already ran, if you want to re-run init, delete the .torspray directory")
+            print("[-] Torspray init already ran, if you want to re-run init, delete the {} directory".format(
+                self.__CONF_DIR))
             exit(1)
 
         if "@" not in email:
@@ -409,9 +410,9 @@ class TorSpray:
         parser_add = subparsers.add_parser('add', help='add node to torspray')
         parser_add.add_argument('hostname', type=str, help='hostname')
         parser_add.add_argument('address', type=str, help='address')
-        parser_add.add_argument('--password', type=str, required=False, help='password')
-        parser_add.add_argument('--keyfile', type=str, required=False, help='keyfile')
-        parser_add.add_argument('--overwrite', action='store_true', required=False, help='overwrite')
+        parser_add.add_argument('-p', '--password', type=str, required=False, help='password')
+        parser_add.add_argument('-k', '--keyfile', type=str, required=False, help='keyfile')
+        parser_add.add_argument('-f', '--overwrite', action='store_true', required=False, help='overwrite')
 
         parser_add.set_defaults(func='add')
 
@@ -427,9 +428,9 @@ class TorSpray:
 
         parser_importhosts = subparsers.add_parser('importhosts', help='import many hosts from file')
         parser_importhosts.add_argument('filename', type=str, help='filename containing "ip name" pairs, like in /etc/hosts')
-        parser_importhosts.add_argument('--password', type=str, required=False, help='password')
-        parser_importhosts.add_argument('--keyfile', type=str, required=False, help='keyfile')
-        parser_importhosts.add_argument('--overwrite', action='store_true', required=False, help='overwrite')
+        parser_importhosts.add_argument('-p', '--password', type=str, required=False, help='password')
+        parser_importhosts.add_argument('-k', '--keyfile', type=str, required=False, help='keyfile')
+        parser_importhosts.add_argument('-f', '--overwrite', action='store_true', required=False, help='overwrite')
         parser_importhosts.set_defaults(func='importhosts')
 
         parser_exporthosts = subparsers.add_parser('exporthosts', help='export hosts to file')
@@ -440,14 +441,14 @@ class TorSpray:
         parser_status.set_defaults(func='status')
 
         parser_netstatus = subparsers.add_parser('netstatus', help='list node network status')
-        parser_netstatus.add_argument('--interval', type=int, default=5, help='interval in seconds')
+        parser_netstatus.add_argument('-i', '--interval', type=int, default=5, help='interval in seconds')
         parser_netstatus.set_defaults(func='netstatus')
 
         parser_pubkey = subparsers.add_parser('pubkey', help='show public key signature for VM creation')
         parser_pubkey.set_defaults(func='pubkey')
 
         parser_copyfile = subparsers.add_parser('copyfile', help='copy file to/from node')
-        parser_copyfile.add_argument('server', type=str)
+        parser_copyfile.add_argument('hostname', type=str)
         parser_copyfile.add_argument('direction', choices=["put", "get"], type=str)
         parser_copyfile.add_argument('src', type=str)
         parser_copyfile.add_argument('dst', type=str)
