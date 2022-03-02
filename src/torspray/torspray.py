@@ -15,6 +15,7 @@ from torspray.modules.config import CONFIG
 from torspray.modules.db import DB
 from torspray.modules.ssh_keys import generate_key, remove_hostkeys
 from torspray.modules.node import Node, NodeAuthException, NodeTimeoutException
+from torspray.modules.tui import TUI
 from torspray.sprays.debian_11_torbridge.spray import Debian11Bridge
 
 
@@ -281,14 +282,16 @@ class TorSpray:
                 data[match["direction"]] = int(matchdict["bytes"])
         return data
 
-    @need_init
-    def netstatus(self, interval):
-        print("[+] Status every {}s:".format(interval))
+    def __netstatus_core(self, interval, tui):
         previous = dt.now()
         last = None
         servers = self.__list_servers()
         servernames = [s.name for s in servers]
         while True:
+            tui.resetlines()
+            tui.print_header()
+            # tui.clear()
+
             current = {}
             for result in self.__node_exec("ifconfig eth0", servers):
                 server, retval, out, err = result
@@ -300,8 +303,7 @@ class TorSpray:
             delta = (now-previous).total_seconds()
 
             # print status
-            all_tx = 0
-            all_rx = 0
+            all_rx, all_tx, all_diff_rx, all_diff_tx, = 0, 0, 0, 0
             for name in servernames:
                 if last is None:
                     continue
@@ -314,32 +316,55 @@ class TorSpray:
                 new_tx = new.get("TX", 0)
 
                 # TODO: make kbit/mbit etc calculation adaptive
-                diff_rx = (new_rx - old_rx) * 8 / 1024 / delta
-                diff_tx = (new_tx - old_tx) * 8 / 1024 / delta
-                #print("{} RX: {}, {} TX: {} {}".format(name, old_rx, new_rx, old_tx, new_tx))
+                diff_rx = (new_rx - old_rx) * 8 / 1024 / 1024 / delta
+                diff_tx = (new_tx - old_tx) * 8 / 1024 / 1024 / delta
+                # tui.print("{} RX: {}, {} TX: {} {}".format(name, old_rx, new_rx, old_tx, new_tx))
 
                 total_rx = new_rx / 1024/1024/1024
                 total_tx = new_tx / 1024/1024/1024
 
-                print("{} RX: {:10.2f} kbit/s TX: {:10.2f} kbit/s - total: RX: {:10.2f} GB TX: {:10.2f} GB".format(name, diff_rx, diff_tx, total_rx, total_tx))
+                # tui.print("{} RX: {:10.2f} kbit/s TX: {:10.2f} kbit/s - total: RX: {:10.2f} GB TX: {:10.2f} GB".format(name, diff_rx, diff_tx, total_rx, total_tx))
+                tui.print_bandwidth(name, diff_rx, diff_tx, total_rx, total_tx)
 
-                all_tx += total_tx
+                all_diff_rx += diff_rx
+                all_diff_tx += diff_tx
+
                 all_rx += total_rx
+                all_tx += total_tx
 
             # calculate time to sleep
             sleeptime = max(0, interval-delta)
 
             if last is not None:
-                print()
-                print("date: {}, delta: {:.2f}, sleep time: {:.2f}     TOTAL: RX: {:10.2f} GB TX: {:10.2f} GB".format(now, delta, sleeptime, all_rx, all_tx))
-                print("="*50)
+                tui.print()
+                # tui.print("date: {}, delta: {:.2f}, sleep time: {:.2f}     TOTAL: RX: {:10.2f} GB TX: {:10.2f} GB".format(now, delta, sleeptime, all_rx, all_tx))
+                tui.print_footer(now, delta, sleeptime, all_diff_rx, all_diff_tx, all_rx, all_tx)
 
             last = current
+
+            # render
+            tui.refresh()
+            tui.getch()
 
             # sleep
             # TODO: use sleeptime here, as we have to compensate for the time it takes the fetch to run
             time.sleep(interval)
             previous = now
+
+
+    @need_init
+    def netstatus(self, interval):
+        print("[+] Status every {}s:".format(interval))
+
+        tui = TUI()
+        tui.start()
+
+        try:
+            self.__netstatus_core(interval, tui)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            tui.stop()
 
     def __showpubkey(self):
         print("##################################################")
