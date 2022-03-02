@@ -7,20 +7,19 @@ class SprayBase:
         self.__env = env
 
     def run(self, cmd, env_param=None):
-        # TODO: check retvals and err!
         if env_param is None:
             env = self.__env
         else:
             env = env_param
 
-        out, err = self.__node.run(cmd, env)
+        retval, out, err = self.__node.run(cmd, env)
         print("$ {}".format(cmd))
         print(out)
-        if len(err) > 0:
-            print("ERROR in command {}:".format(cmd))
+        if retval != 0:
+            print("ERROR in command {} (retval: {}):".format(cmd, retval))
             print(err)
-            # exit(1)
-        return out, err
+            exit(1)
+        return retval, out, err
 
     def get_osrelease(self):
         version = None
@@ -41,7 +40,7 @@ class SprayBase:
         return version, codename
 
     def get_arch(self):
-        out, err = self.__node.run("dpkg --print-architecture")
+        retval, out, err = self.__node.run("dpkg --print-architecture")
         arch = out.strip()
         return arch
 

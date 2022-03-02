@@ -23,7 +23,7 @@ bring up tor nodes to help out the network in times of crisis.
 ### What do I need?
 - You will need a virtual machine (VM) with Debian 11 at a hosting provider. I use Hetzner.
 - On installation, specify the ssh key that torspray generates. Passwords support doesn't yet work unfortunately.
-  - if you don't remember, run `torspray showpubkey`
+  - if you don't remember, run `torspray pubkey`
 - Once the server is provisioned you can add it to torspray to manage
 
 
@@ -96,7 +96,7 @@ debian-2gb-hel1-1
 
 Showing pubkey because I forgot:
 ```
-$ torspray showpubkey
+$ torspray pubkey
 ##################################################
 #        Use this key when creating the VM:      #
 ##################################################

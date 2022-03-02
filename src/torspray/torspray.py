@@ -40,8 +40,8 @@ class TorSpray:
 
     def __node_exec(self, cmd, nodes):
         def run(node, cmd):
-            out, err = node.run(cmd)
-            return out, err
+            retval, out, err = node.run(cmd)
+            return retval, out, err
 
         with ThreadPoolExecutor(max_workers=CONFIG.MAX_WORKERS) as executor:
             futures = {}
@@ -56,8 +56,8 @@ class TorSpray:
                 except Exception as exc:
                     print("EXCEPTION on {}: {}".format(server, exc))
                 else:
-                    out, err = data
-                    yield server, out, err
+                    retval, out, err = data
+                    yield server, retval, out, err
 
     def need_init(f, *args, **kwargs):  # *args, **kwargs makes pycharm shut up
         def magic(self, *args, **kwargs):
@@ -94,10 +94,10 @@ class TorSpray:
             print("[-] Failed to reach server, try again later")
             exit(1)
 
-        out, err = node.run("whoami")
+        retval, out, err = node.run("whoami")
         ret_username = out.strip()
 
-        out, err = node.run("hostname")
+        retval, out, err = node.run("hostname")
         ret_hostname = out.strip()
         print("We have:")
         print("\tusername", ret_username)
@@ -159,7 +159,7 @@ class TorSpray:
             exit(1)
 
         for result in self.__node_exec(cmd, servers):
-            server, out, err = result
+            server, retval, out, err = result
             print("{}:".format(server))
             print(out)
 
@@ -263,7 +263,7 @@ class TorSpray:
     def status(self):
         print("[+] Status:")
         servers = self.__list_servers()
-        for node, out, err in self.__node_exec("whoami", servers):
+        for node, retval, out, err in self.__node_exec("whoami", servers):
             print("{}:".format(node))
             print(out, err)
 
@@ -291,7 +291,7 @@ class TorSpray:
         while True:
             current = {}
             for result in self.__node_exec("ifconfig eth0", servers):
-                server, out, err = result
+                server, retval, out, err = result
                 data = self.__parse_ifconfig(out)
                 current[server.name] = data
 
@@ -349,7 +349,7 @@ class TorSpray:
             print(f.read())
 
     @need_init
-    def showpubkey(self):
+    def pubkey(self):
         self.__showpubkey()
 
     def init(self, email):
@@ -443,8 +443,8 @@ class TorSpray:
         parser_netstatus.add_argument('--interval', type=int, default=5, help='interval in seconds')
         parser_netstatus.set_defaults(func='netstatus')
 
-        parser_showpubkey = subparsers.add_parser('showpubkey', help='show public key signature for VM creation')
-        parser_showpubkey.set_defaults(func='showpubkey')
+        parser_pubkey = subparsers.add_parser('pubkey', help='show public key signature for VM creation')
+        parser_pubkey.set_defaults(func='pubkey')
 
         parser_copyfile = subparsers.add_parser('copyfile', help='copy file to/from node')
         parser_copyfile.add_argument('server', type=str)
@@ -453,14 +453,14 @@ class TorSpray:
         parser_copyfile.add_argument('dst', type=str)
         parser_copyfile.set_defaults(func='copyfile')
 
-        parser_cluster_exec = subparsers.add_parser('cluster-exec', help='execute commands on one node')
-        parser_cluster_exec.add_argument('cmd', type=str)
-        parser_cluster_exec.set_defaults(func='cluster-exec')
+        parser_run = subparsers.add_parser('run', help='run command on node')
+        parser_run.add_argument('hostname', type=str)
+        parser_run.add_argument('cmd', type=str)
+        parser_run.set_defaults(func='run')
 
-        parser_node_exec = subparsers.add_parser('node-exec', help='execute commands on all nodes')
-        parser_node_exec.add_argument('hostname', type=str)
-        parser_node_exec.add_argument('cmd', type=str)
-        parser_node_exec.set_defaults(func='node-exec')
+        parser_run_all = subparsers.add_parser('run-all', help='run commands on all nodes')
+        parser_run_all.add_argument('cmd', type=str)
+        parser_run_all.set_defaults(func='run-all')
 
         parser_shell_exec = subparsers.add_parser('shell', help='spawn pty shell on the node')
         parser_shell_exec.add_argument('hostname', type=str)
@@ -493,15 +493,15 @@ class TorSpray:
             self.status()
         elif func == "netstatus":
             self.netstatus(self.__args.interval)
-        elif func == "showpubkey":
-            self.showpubkey()
+        elif func == "pubkey":
+            self.pubkey()
         elif func == "copyfile":
             self.copyfile(self.__args.server, self.__args.direction, self.__args.src, self.__args.dst)
-        elif func == "node-exec":
+        elif func == "run":
             self.exec(self.__args.hostname, self.__args.cmd)
         elif func == "shell":
             self.shell(self.__args.hostname)
-        elif func == "cluster-exec":
+        elif func == "run-all":
             self.exec(None, self.__args.cmd)
         elif func == "spray":
             self.spray(self.__args.hostname)

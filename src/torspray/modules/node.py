@@ -93,8 +93,10 @@ class Node:
         out = stdout.read().decode().strip()
         err = stderr.read().decode().strip()
 
+        retval = stdout.channel.recv_exit_status()
+
         # WARNING: anything that comes out here can be MALICIOUS!
-        return out, err
+        return retval, out, err
 
     def invoke_shell(self, term="vt100", width=80, height=24):
         self.__connect_ssh()
