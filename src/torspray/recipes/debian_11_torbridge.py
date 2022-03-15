@@ -1,6 +1,9 @@
 import os
 import random
 
+from pynfra.modules.classes import SprayBase
+
+
 UNATTENDED_UPGRADES_CFG = """
 Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=${distro_codename},label=Debian-Security";
@@ -52,8 +55,6 @@ ContactInfo <###CONTACTINFO###>
 # Pick a nickname that you like for your bridge.  This is optional.
 #Nickname ###NICKNAME###
 """
-
-from torspray.modules.classes import SprayBase
 
 
 class Debian11Bridge(SprayBase):

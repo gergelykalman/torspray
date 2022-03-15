@@ -45,7 +45,7 @@ setup(
     packages=find_packages(where='src'),
     python_requires='>=3.6, <4',
     install_requires=[
-        'paramiko',
+        'pynfra==0.1.1',
     ],
     extras_require={},
     package_data={},
