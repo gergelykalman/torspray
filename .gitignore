@@ -1,3 +1,5 @@
+src/.pynfra/
+src/hosts.txt
 .pynfra/
 .idea/
 .torspray/

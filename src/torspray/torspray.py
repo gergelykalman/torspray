@@ -1,6 +1,6 @@
 from pynfra.pynfra import Pynfra
 
-from recipes.debian_11_torbridge import Debian11Bridge
+from torspray.recipes.debian_11_torbridge import Debian11Bridge
 
 
 def main():
