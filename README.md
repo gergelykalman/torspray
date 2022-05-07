@@ -1,6 +1,8 @@
 # torspray
 A console utility to bring up new Tor nodes easily
 
+If you feel like supporthing the project, you can [buy me a coffee](https://www.buymeacoffee.com/gergelykalman).
+
 ### Current progress
 Works:
 - key generation

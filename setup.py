@@ -9,7 +9,7 @@ long_description = (here / 'README.md').read_text(encoding='utf-8')
 
 setup(
     name='torspray',
-    version='0.1.5',
+    version='0.1.6',
     description='A console utility to bring up new Tor bridges easily',
     long_description=long_description,
     long_description_content_type='text/markdown',
