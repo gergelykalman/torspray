@@ -88,7 +88,7 @@ $ systemctl restart tor.service
 
 Testing execute on node 'testnode'
 ```
-$ torspray node-exec testnode 'hostname'
+$ torspray run testnode 'hostname'
 [+] Execing: hostname
 testnode:
 debian-2gb-hel1-1
@@ -119,7 +119,7 @@ $ torspray spray testnode2
 
 Executing 'hostname' on all nodes we know about:
 ```
-$ torspray cluster-exec 'hostname'
+$ torspray run-all 'hostname'
 [+] Execing: hostname
 testnode:
 debian-2gb-hel1-1
@@ -149,6 +149,9 @@ date: 2022-03-02 00:37:48.537278, delta: 1.17, sleep time: 0.00     TOTAL: RX:  
 
 Executing a pty actual shell on a node:
 ```bash
+$ torspray shell testnode
+$ top
+...
 top - 14:33:41 up 4 days, 15:06,  1 user,  load average: 0.03, 0.01, 0.00
 Tasks:  83 total,   1 running,  82 sleeping,   0 stopped,   0 zombie
 %Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
